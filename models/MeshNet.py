@@ -23,12 +23,14 @@ class MeshNet(nn.Module):
             nn.BatchNorm1d(1024),
             nn.ReLU(),
         )
-        self.classifier = nn.Sequential(
+        self.fc = nn.Sequential(
             nn.Linear(1024, 512),
             nn.ReLU(),
             nn.Dropout(p=0.5),
             nn.Linear(512, 256),
-            nn.ReLU(),
+            nn.ReLU()
+        )
+        self.head = nn.Sequential(
             nn.Dropout(p=0.5),
             nn.Linear(256, 40)
         )
@@ -44,10 +46,7 @@ class MeshNet(nn.Module):
         fea = self.concat_mlp(torch.cat([spatial_fea1, spatial_fea2, spatial_fea3], 1))
         fea = torch.max(fea, dim=2)[0]
         fea = fea.reshape(fea.size(0), -1)
-        fea = self.classifier[:-1](fea)
-        cls = self.classifier[-1:](fea)
+        fea = self.fc(fea)
+        label = self.head(fea)
 
-        if self.require_fea:
-            return cls, fea / torch.norm(fea)
-        else:
-            return cls
+        return label, fea / torch.norm(fea)

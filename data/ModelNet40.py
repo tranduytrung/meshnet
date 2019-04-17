@@ -12,15 +12,83 @@ class ModelNet40(data.Dataset):
         self.part = part
 
         self.data = []
-        type_index = 0
-        for type in os.listdir(self.root):
-            type_root = os.path.join(os.path.join(self.root, type), part)
+        for label_index, label in enumerate(os.listdir(self.root)):
+            type_root = os.path.join(os.path.join(self.root, label), part)
             for filename in os.listdir(type_root):
                 if filename.endswith('.npz'):
-                    self.data.append((os.path.join(type_root, filename), type_index))
-            type_index += 1
+                    self.data.append((os.path.join(type_root, filename), label_index))
 
     def __getitem__(self, i):
+        path, label = self.data[i]
+        data = np.load(path)
+        centers = data['centers'] # [face, 3]
+        corners = data['corners'] # [face, vertice, 3]
+        normals = data['normals'] # [face, 3]
+        neighbors_index = data['neighbors_index'] # [face, ?]
+        
+        num_point = len(centers)
+        # fill for n < 1024
+        if num_point < 1024:
+            chosen_indexes = np.random.randint(0, num_point, size=(1024 - num_point))
+            centers = np.concatenate((centers, centers[chosen_indexes]))
+            corners = np.concatenate((corners, corners[chosen_indexes]))
+            normals = np.concatenate((normals, normals[chosen_indexes]))
+            neighbors_index = np.concatenate((neighbors_index, neighbors_index[chosen_indexes]))
+            
+            # choose 3 neighbors
+            new_neighbors_index = np.empty([1024, 3], dtype=np.int64)
+            for idx in range(1024):
+                neighbors = neighbors_index[idx]
+                if len(neighbors) > 3:
+                    new_neighbors_index[idx] = np.random.choice(neighbors, 3, replace=False)
+                else:
+                    new_neighbors_index[idx] = np.concatenate((neighbors, [idx]*(3-len(neighbors))))
+
+            neighbors_index = new_neighbors_index
+        else:
+            chosen_indexes = np.random.choice(num_point, size=1024, replace=False)
+            centers = centers[chosen_indexes]
+            corners = corners[chosen_indexes]
+            normals = normals[chosen_indexes]
+            neighbors_index = neighbors_index[chosen_indexes]
+            # remove unlinkable index and choose 3 neighbors
+            new_neighbors_index = np.empty([1024, 3], dtype=np.int64)
+            for idx in range(1024):
+                mask = np.in1d(neighbors_index[idx], chosen_indexes)
+                neighbors = np.array(neighbors_index[idx])[mask]
+                if len(neighbors) > 3:
+                    new_neighbors_index[idx] = np.random.choice(neighbors, 3, replace=False)
+                else:
+                    new_neighbors_index[idx] = np.concatenate((neighbors, [chosen_indexes[idx]]*(3-len(neighbors))))
+
+            # re-index the neighbor
+            invert_index = {value: key for key, value in enumerate(chosen_indexes)}
+            neighbors_index = np.vectorize(invert_index.get, cache=True)(new_neighbors_index)
+
+        # data augmentation
+        if self.augment_data and self.part == 'train':
+            centers = self.__augment__(centers)
+            corners = self.__augment__(corners)
+
+        # make corner relative to center
+        corners = corners - centers[:, np.newaxis, :]
+        corners = corners.reshape([-1, 9])
+
+        # to tensor
+        centers = torch.from_numpy(centers).float().permute(1, 0).contiguous()
+        corners = torch.from_numpy(corners).float().permute(1, 0).contiguous()
+        normals = torch.from_numpy(normals).float().permute(1, 0).contiguous()
+        neighbors_index = torch.from_numpy(neighbors_index).long()
+        target = torch.tensor(label, dtype=torch.long)
+
+        return centers, corners, normals, neighbors_index, target
+
+    def __augment__(self, data):
+        sigma, clip = 0.01, 0.05
+        jittered_data = np.clip(sigma * np.random.randn(*data.shape), -clip, clip)
+        return data + jittered_data
+
+    def __getitem__o(self, i):
         path, type = self.data[i]
         data = np.load(path)
         face = data['face']
@@ -58,3 +126,7 @@ class ModelNet40(data.Dataset):
 
     def __len__(self):
         return len(self.data)
+
+if __name__ == "__main__":
+    dataset = ModelNet40({'data_root': '../meshnet_data/ModelNet40/', 'augment_data': True})
+    dataset[0]
