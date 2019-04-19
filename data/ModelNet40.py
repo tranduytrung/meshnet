@@ -12,7 +12,9 @@ class ModelNet40(data.Dataset):
         self.part = part
 
         self.data = []
-        for label_index, label in enumerate(os.listdir(self.root)):
+        labels = os.listdir(self.root)
+        labels.sort()
+        for label_index, label in enumerate(labels):
             type_root = os.path.join(os.path.join(self.root, label), part)
             for filename in os.listdir(type_root):
                 if filename.endswith('.npz'):

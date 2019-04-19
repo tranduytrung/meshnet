@@ -1,5 +1,5 @@
 import copy
-import os
+import os, glob
 from datetime import datetime
 import torch, torch.jit
 from torch.autograd import Variable
@@ -11,6 +11,25 @@ from data import ModelNet40
 from models import MeshNet
 from utils import append_feature, calculate_map
 
+def trace(model, batch_size):
+    # trace
+    centers = torch.rand((batch_size, 3, 1024), dtype=torch.float)
+    corners = torch.rand((batch_size, 9, 1024), dtype=torch.float)
+    normals = torch.rand((batch_size, 3, 1024), dtype=torch.float)
+    neighbor_index = torch.randint(1024, (batch_size, 1024, 3), dtype=torch.long)
+    if torch.cuda.is_available():
+        centers = centers.cuda()
+        normals = normals.cuda()
+        corners = corners.cuda()
+        neighbor_index = neighbor_index.cuda()
+    
+    model.train()
+    model_train = torch.jit.trace(model, (centers, corners, normals, neighbor_index))
+    
+    model.eval()
+    model_eval = torch.jit.trace(model, (centers, corners, normals, neighbor_index))
+    return model_train, model_eval
+
 def train_model(model, data_loader, criterion, optimizer, scheduler, cfg):
     from tensorlog import summary
 
@@ -19,6 +38,9 @@ def train_model(model, data_loader, criterion, optimizer, scheduler, cfg):
     best_model_wts = copy.deepcopy(model.state_dict())
     max_epoch = cfg['max_epoch']
     ckpt_root = cfg['ckpt_root']
+    batch_size = cfg['batch_size']
+	
+    model_train, model_eval = trace(model, batch_size)
 
     for epoch in range(1, max_epoch + 1):
 
@@ -31,14 +53,15 @@ def train_model(model, data_loader, criterion, optimizer, scheduler, cfg):
             if phrase == 'train':
                 scheduler.step()
                 model.train()
+                forward = model_train
             else:
                 model.eval()
+                forward = model_eval
 
             running_loss = 0.0
             running_corrects = 0
             ft_all, lbl_all = None, None
 
-            batch_size = cfg['batch_size']
             dataset_size = len(data_loader[phrase].dataset)
             total_steps = int(dataset_size / batch_size)
 
@@ -59,7 +82,7 @@ def train_model(model, data_loader, criterion, optimizer, scheduler, cfg):
                 # targets = Variable(torch.cuda.LongTensor(targets.cuda()))
 
                 with torch.set_grad_enabled(phrase == 'train'):
-                    outputs, feas = model(centers, corners, normals, neighbor_index)
+                    outputs, feas = forward(centers, corners, normals, neighbor_index)
                     _, preds = torch.max(outputs, 1)
                     loss = criterion(outputs, targets)
 
@@ -107,6 +130,19 @@ def train_model(model, data_loader, criterion, optimizer, scheduler, cfg):
     summary.close()
     return best_model_wts
 
+def load_last(model, ckpt_root):
+    pattern = os.path.join(ckpt_root, '*.pkl')
+    ckpts = glob.glob(pattern)
+    if len(ckpts) == 0:
+        return model
+    ckpts.sort()
+    last_ckpt = ckpts[-1]
+    state_dict = torch.load(last_ckpt, 
+        map_location=lambda storage, location: storage.cuda() if torch.cuda.is_available() else storage)
+    model.load_state_dict(state_dict)
+    print(f'loaded {last_ckpt}')
+    return model
+
 def main():
     cfg = get_train_config()
 
@@ -126,24 +162,15 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=cfg['lr'], momentum=cfg['momentum'], weight_decay=cfg['weight_decay'])
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=cfg['milestones'], gamma=cfg['gamma'])
-
-    # trace
-    batch_size = cfg['batch_size']
-    centers = torch.rand((batch_size, 3, 1024), dtype=torch.float)
-    corners = torch.rand((batch_size, 9, 1024), dtype=torch.float)
-    normals = torch.rand((batch_size, 3, 1024), dtype=torch.float)
-    neighbor_index = torch.randint(1024, (batch_size, 1024, 3), dtype=torch.long)
-    if torch.cuda.is_available():
-        centers = centers.cuda()
-        normals = normals.cuda()
-        corners = corners.cuda()
-        neighbor_index = neighbor_index.cuda()
-    
-    model = torch.jit.trace(model, (centers, corners, normals, neighbor_index))
+    # optimizer = optim.SGD(model.parameters(), lr=cfg['lr'], momentum=cfg['momentum'])
+    # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=cfg['milestones'], gamma=cfg['gamma'])
+    scheduler = optim.lr_scheduler.StepLR(optimizer, 10, gamma=cfg['gamma'])
+		
+    ckpt_root = cfg['ckpt_root']
+    model = load_last(model, ckpt_root)
 
     best_model_wts = train_model(model, data_loader, criterion, optimizer, scheduler, cfg)
-    torch.save(best_model_wts, os.path.join(cfg['ckpt_root'], 'MeshNet_best.pkl'))
+    torch.save(best_model_wts, os.path.join(ckpt_root, 'MeshNet_best.pkl'))
 
 if __name__ == '__main__':
     main()
