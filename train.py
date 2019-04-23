@@ -101,7 +101,7 @@ def train_model(model, data_loader, criterion, optimizer, scheduler, cfg):
                     running_corrects += batch_correct
 
                 print(f'{datetime.now()} {phrase} {i}/{total_steps}  loss: {batch_loss:.4f} acc: {batch_acc:.4f}')
-                summary.add_scalar(f'{phrase}/batch/loss', batch_loss, global_step=(epoch - 1)*max_epoch + i)
+                summary.add_scalar(f'{phrase}/batch/loss', batch_loss, global_step=(epoch - 1)*total_steps + i)
 
             epoch_loss = running_loss / dataset_size
             epoch_acc = running_corrects / dataset_size
@@ -122,10 +122,10 @@ def train_model(model, data_loader, criterion, optimizer, scheduler, cfg):
                     torch.save(copy.deepcopy(model.state_dict()), filename)
 
                 print('{} Loss: {:.4f} Acc: {:.4f} mAP: {:.4f}'.format(phrase, epoch_loss, epoch_acc, epoch_map))
-                summary.add_scalar(f'{phrase}/epoch/mAP', epoch_map, global_step=epoch*max_epoch)
+                summary.add_scalar(f'{phrase}/epoch/mAP', epoch_map, global_step=epoch*total_steps)
             
-            summary.add_scalar(f'{phrase}/epoch/accuracy', epoch_acc, global_step=epoch*max_epoch)
-            summary.add_scalar(f'{phrase}/epoch/loss', epoch_loss, global_step=epoch*max_epoch)
+            summary.add_scalar(f'{phrase}/epoch/accuracy', epoch_acc, global_step=epoch*total_steps)
+            summary.add_scalar(f'{phrase}/epoch/loss', epoch_loss, global_step=epoch*total_steps)
 
     summary.close()
     return best_model_wts
