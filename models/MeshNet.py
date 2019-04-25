@@ -5,10 +5,8 @@ from models import SpatialDescriptor, StructuralDescriptor, MeshConvolution
 
 class MeshNet(nn.Module):
 
-    def __init__(self, cfg, require_fea=False):
+    def __init__(self, cfg, num_classes=40, head=True):
         super(MeshNet, self).__init__()
-        self.require_fea = require_fea
-
         self.spatial_descriptor = SpatialDescriptor()
         self.structural_descriptor = StructuralDescriptor(cfg['structural_descriptor'])
         self.mesh_conv1 = MeshConvolution(cfg['mesh_convolution'], 64, 131, 256, 256)
@@ -30,10 +28,11 @@ class MeshNet(nn.Module):
             nn.Linear(512, 256),
             nn.ReLU()
         )
-        self.head = nn.Sequential(
-            nn.Dropout(p=0.5),
-            nn.Linear(256, 40)
-        )
+        if head:
+            self.head = nn.Sequential(
+                nn.Dropout(p=0.5),
+                nn.Linear(256, num_classes)
+            )
 
     def forward(self, centers, corners, normals, neighbor_index):
         spatial_fea0 = self.spatial_descriptor(centers)
@@ -47,6 +46,9 @@ class MeshNet(nn.Module):
         fea = torch.max(fea, dim=2)[0]
         fea = fea.reshape(fea.size(0), -1)
         fea = self.fc(fea)
-        label = self.head(fea)
 
-        return label, fea / torch.norm(fea)
+        if hasattr(self, 'head'):
+            label = self.head(fea)
+            return label, fea / torch.norm(fea)
+        else:
+            return fea
