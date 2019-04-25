@@ -10,6 +10,7 @@ from config import get_train_config
 from data import ModelNet40
 from models import MeshNet
 from utils import append_feature, calculate_map
+import numpy as np
 
 def trace(model, batch_size):
     # trace
@@ -39,6 +40,7 @@ def train_model(model, data_loader, criterion, optimizer, scheduler, cfg, start_
     max_epoch = cfg['max_epoch']
     ckpt_root = cfg['ckpt_root']
     batch_size = cfg['batch_size']
+    val_acc_hist = []
 	
     model_train, model_eval = trace(model, batch_size)
 
@@ -115,6 +117,7 @@ def train_model(model, data_loader, criterion, optimizer, scheduler, cfg, start_
                 if epoch_acc > best_acc:
                     best_acc = epoch_acc
                     best_model_wts = copy.deepcopy(model.state_dict())
+                    val_acc_hist.append(epoch_acc)
                 if epoch_map > best_map:
                     best_map = epoch_map
                 if epoch % 10 == 0:
@@ -128,7 +131,7 @@ def train_model(model, data_loader, criterion, optimizer, scheduler, cfg, start_
             summary.add_scalar(f'{phrase}/epoch/loss', epoch_loss, global_step=epoch*total_steps)
 
     summary.close()
-    return best_model_wts
+    return best_model_wts, val_acc_hist
 
 def load_last(model, ckpt_root):
     pattern = ckpt_root + r'????.pkl'
@@ -145,7 +148,14 @@ def load_last(model, ckpt_root):
     # get last epoch
     last_epoch = os.path.basename(last_ckpt).split('.')[0]
     last_epoch = int(last_epoch)
-    return model, last_epoch
+
+    # get acc hist
+    acc_hist_path = os.path.join(ckpt_root, 'acc_hist.npy')
+    if os.path.isfile(acc_hist_path):
+        acc_hist = np.load(acc_hist_path)
+    else:
+        acc_hist = []
+    return model, last_epoch, acc_hist
 
 def main():
     cfg = get_train_config()
@@ -165,7 +175,7 @@ def main():
     # model = nn.DataParallel(model)
 		
     ckpt_root = cfg['ckpt_root']
-    model, last_epoch = load_last(model, ckpt_root)
+    model, last_epoch, acc_hist = load_last(model, ckpt_root)
     print(f'last epoch is {last_epoch}')
 
     criterion = nn.CrossEntropyLoss()
@@ -176,8 +186,14 @@ def main():
     for _ in range(last_epoch):
         scheduler.step()
 
-    best_model_wts = train_model(model, data_loader, criterion, optimizer, scheduler, cfg, start_epoch=last_epoch + 1)
-    torch.save(best_model_wts, os.path.join(ckpt_root, '0000.pkl'))
+    best_model_wts, new_acc_hist = train_model(model, data_loader, criterion, optimizer, scheduler, cfg, start_epoch=last_epoch + 1)
+
+    # save acc hist
+    acc_hist_path = os.path.join(ckpt_root, 'acc_hist.npy')
+    acc_hist = np.concatenate((acc_hist, new_acc_hist))
+    np.save(acc_hist_path, acc_hist)
+
+    torch.save(best_model_wts, os.path.join(ckpt_root, 'best_model.pkl'))
 
 if __name__ == '__main__':
     main()
